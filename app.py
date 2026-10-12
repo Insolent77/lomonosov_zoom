@@ -9,6 +9,7 @@ import time
 from datetime import date
 from urllib.parse import parse_qs
 from zoom_archive import fetch_recordings
+from zoom_links import playback_url
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,7 +80,7 @@ def save_recording(obj):
     uuid, meeting_id = obj.get("uuid"), obj.get("id")
     if not isinstance(uuid, str) or not uuid or meeting_id is None:
         return "invalid"
-    url = obj.get("share_url") or ""
+    url = playback_url(obj)
     if not isinstance(url, str) or (url and not url.startswith("https://")):
         return "invalid"
     topic = str(obj.get("topic") or "")[:300]
