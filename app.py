@@ -32,6 +32,9 @@ def init_db():
             id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL, topic TEXT NOT NULL,
             teacher TEXT NOT NULL, starts TEXT NOT NULL, meeting_id TEXT NOT NULL,
             meeting_uuid TEXT NOT NULL UNIQUE);
+        CREATE TABLE IF NOT EXISTS recordings (
+          meeting_uuid TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, topic TEXT,
+          start_time TEXT, recording_url TEXT, received_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL,
             lesson_id INTEGER NOT NULL, meeting_uuid TEXT NOT NULL UNIQUE,
@@ -68,6 +71,53 @@ def publish(obj):
         return "sent", lesson["group_id"]
 
 
+
+def save_recording(obj):
+    uuid, meeting_id = obj.get("uuid"), obj.get("id")
+    if not isinstance(uuid, str) or not uuid or meeting_id is None:
+        return "invalid"
+    url = obj.get("share_url") or ""
+    if not isinstance(url, str) or (url and not url.startswith("https://")):
+        return "invalid"
+    topic = str(obj.get("topic") or "")[:300]
+    start = str(obj.get("start_time") or "")[:100]
+    with connect() as db:
+        old = db.execute("SELECT 1 FROM recordings WHERE meeting_uuid=?", (uuid,)).fetchone()
+        db.execute("""INSERT INTO recordings (meeting_uuid, meeting_id, topic, start_time, recording_url, received_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(meeting_uuid) DO UPDATE SET
+            meeting_id=excluded.meeting_id, topic=excluded.topic,
+            start_time=excluded.start_time,
+            recording_url=CASE WHEN excluded.recording_url <> '' THEN excluded.recording_url ELSE recordings.recording_url END""",
+          (uuid, str(meeting_id), topic, start, url, datetime.now(timezone.utc).isoformat()))
+    return "updated" if old else "received"
+
+
+def render_recordings():
+    esc = lambda x: html.escape(str(x or ""), quote=True)
+    with connect() as db:
+        rows = db.execute("SELECT * FROM recordings ORDER BY received_at DESC LIMIT 200").fetchall()
+    items = []
+    for row in rows:
+        link = ('<a href="' + esc(row["recording_url"]) + '" target="_blank" rel="noopener noreferrer">Открыть запись ↗</a>'
+                if row["recording_url"] else '<span>Ссылка на запись не передана Zoom</span>')
+        items.append('<article><b>' + esc(row["topic"] or "Конференция Zoom") +
+          '</b><p>Начало: ' + esc(row["start_time"] or "не указано") +
+          ' · Получено: ' + esc(row["received_at"]) + '</p>' +
+          '<p>Meeting ID: ' + esc(row["meeting_id"]) + ' · UUID: ' + esc(row["meeting_uuid"]) +
+          '</p>' + link + '</article>')
+    return ("""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow"><title>Полученные записи Zoom</title>
+    <style>body{font:15px/1.5 system-ui;background:#f4f6fb;color:#17223c;max-width:960px;margin:35px auto;padding:0 20px}
+    article{background:#fff;border:1px solid #dce4ef;border-radius:14px;padding:20px;margin:14px 0;overflow-wrap:anywhere}
+    p{color:#70809a;font-size:13px}a{color:#3167e8}small{color:#8392a9}</style></head><body>
+    <p><a href="/">← Главная</a></p><h1>Полученные записи Zoom</h1>
+    <p>Сюда поступают события recording.completed, даже если занятие пока не привязано к группе.</p>
+    <p><b>Внимание:</b> этот тестовый раздел доступен всем по ссылке.</p>""" +
+    (''.join(items) if items else '<article>Пока записей нет. После завершения облачной записи Zoom пришлёт событие.</article>') +
+    '<small>Бесплатный Render: данные могут исчезнуть при перезапуске сервиса.</small></body></html>')
+
+
 def render_page():
     with connect() as db:
         groups = db.execute("SELECT * FROM groups ORDER BY id").fetchall()
@@ -95,7 +145,7 @@ def render_page():
             + '<h3>Занятия</h3>' + lesson_html + '<h3>Сообщения в чате</h3><div class="messages">' + msg_html + '</div></section>'
         )
     notice = ('Демонстрационный режим: кнопки создают тестовые записи.' if DEMO
-              else 'Внешний стенд: демо-кнопки отключены. Приём webhook: POST /webhooks/zoom.')
+              else 'Внешний стенд: демо-кнопки отключены. <a href="/recordings">Полученные записи Zoom ↗</a>. Приём webhook: POST /webhooks/zoom.')
     return """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Мой Ломоносов · Zoom</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#15213b;font:15px/1.5 system-ui,'Segoe UI',sans-serif}
@@ -138,6 +188,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/":
             return self.respond(200, render_page().encode(), "text/html; charset=utf-8")
+        if path == "/recordings":
+            return self.respond(200, render_recordings().encode(), "text/html; charset=utf-8")
         if path == "/health":
             return self.respond(200, {"ok": True})
         return self.respond(404, {"error": "Not found"})
@@ -192,8 +244,10 @@ class Handler(BaseHTTPRequestHandler):
         obj = data.get("payload", {}).get("object")
         if not isinstance(obj, dict):
             return self.respond(400, {"error": "Invalid payload"})
+        save_state = save_recording(obj)
         state, group = publish(obj)
-        return self.respond(200, {"status": state, "group_id": group})
+        print(f"Zoom recording: saved={save_state} routing={state} meeting_id={obj.get('id')}", flush=True)
+        return self.respond(200, {"status": state, "stored": save_state, "group_id": group})
 
 
 if __name__ == "__main__":
