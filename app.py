@@ -10,6 +10,7 @@ from datetime import date
 from urllib.parse import parse_qs
 from zoom_archive import fetch_recordings
 from zoom_links import playback_url
+from demo_workflow import PAGE as DEMO_WORKFLOW_PAGE
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -188,7 +189,7 @@ button{border:0;border-radius:10px;background:#396dea;color:#fff;padding:11px;wi
 @media(max-width:760px){.layout{grid-template-columns:1fr}h1{font-size:25px}}
 </style></head><body><header>🟠 Мой Ломоносов · тестовый стенд</header><main><h1>Записи Zoom → учебные чаты</h1>
 <p class="lead">Распределение записей по UUID конкретного сеанса конференции</p><div class="notice">""" + notice + """</div>
-<div class="layout">""" + "".join(cards) + """</div><p class="footer">Пример: один Meeting ID, но два разных Session UUID.</p></main>
+<p><a href="/teacher">Кабинет преподавателя ↗</a> · <a href="/chats">Учебные чаты ↗</a></p><div class="layout">""" + "".join(cards) + """</div><p class="footer">Пример: один Meeting ID, но два разных Session UUID.</p></main>
 <script>document.querySelectorAll('button[data-uuid]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{
 let r=await fetch('/api/demo/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uuid:b.dataset.uuid,id:b.dataset.meeting})});
 let v=await r.json();if(v.status==='sent'||v.status==='duplicate')location.reload();else throw Error(v.status);
@@ -209,6 +210,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path in ("/teacher", "/chats"):
+            return self.respond(200, DEMO_WORKFLOW_PAGE.encode(), "text/html; charset=utf-8")
         if path == "/":
             return self.respond(200, render_page().encode(), "text/html; charset=utf-8")
         if path == "/recordings":
