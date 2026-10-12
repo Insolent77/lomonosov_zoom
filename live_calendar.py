@@ -1,0 +1,37 @@
+"""Live private calendar using /api/calendar. Zoom URLs are never exposed."""
+PAGE=r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Реальные занятия — Мой Ломоносов</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:#fff;color:#202b40}header{border-bottom:1px solid #e4e8f0;padding:17px 22px;display:flex;gap:15px;align-items:center;flex-wrap:wrap}h1{font-size:21px;margin:0}main{padding:18px;max-width:1600px;margin:auto}button,input{font:inherit;border:1px solid #d6deea;background:#fff;padding:9px 12px;border-radius:8px}button{cursor:pointer}.bar{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin:15px 0}.badge{background:#e9efff;color:#3861c8;border-radius:8px;padding:8px}#message{color:#a34b38;margin:10px 0}#calendar{overflow-x:auto;border:1px solid #e2e7ef;border-radius:12px}.headers,.body{display:grid;grid-template-columns:60px repeat(7,minmax(150px,1fr));min-width:970px}.headers{position:sticky;top:0;background:white;z-index:5}.headers div{padding:13px 9px;text-align:center;border-left:1px solid #edf0f4}.body{height:900px;position:relative}.times{position:relative}.hour{position:absolute;top:var(--top);right:7px;transform:translateY(-6px);font-size:11px;color:#8b98a9}.day{position:relative;border-left:1px solid #e6ebf3;background:repeating-linear-gradient(to bottom,transparent 0,transparent 59px,#edf0f5 59px,#edf0f5 60px)}.event{position:absolute;left:3px;right:3px;top:var(--top);height:var(--height);background:#eaf0ff;border-left:4px solid #5177df;border-radius:5px;padding:5px;overflow:hidden;font-size:11px;cursor:pointer}.event strong{display:block;font-size:11px}.event small{display:block}.detail{margin-top:16px;border:1px solid #dee6f1;border-radius:12px;padding:18px;display:none}.filters{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0}.filters label{font-size:12px;padding:5px;background:#f4f6fa;border-radius:7px}.note{font-size:12px;color:#78859a}
+</style></head><body><header><strong>🟠 Мой Ломоносов</strong><h1>Календарь реальных занятий</h1><a href="/teacher" style="margin-left:auto">Кабинет преподавателя</a></header>
+<main><p class="note">Режим чтения из PostgreSQL. Данные обновляются при смене недели. Вход в Zoom и отправка записей пока не подключены.</p>
+<div class="bar"><button id="prev">‹</button><button id="today">Сегодня</button><button id="next">›</button><strong id="range"></strong><label>Дата <input type="date" id="pick"></label><span class="badge" id="count">— занятий</span></div>
+<div class="filters" id="rooms"></div><p id="message"></p><section id="calendar"></section><section class="detail" id="detail"></section></main>
+<script>
+let current=new Date(),shown=[],enabled=new Set(Array.from({length:12},(_,i)=>'Zoom '+(i+1)));
+function monday(d){let x=new Date(d);x.setDate(x.getDate()-(x.getDay()+6)%7);return x}
+function plus(d,n){let x=new Date(d);x.setDate(x.getDate()+n);return x}
+function iso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function fmt(d,opts){return new Intl.DateTimeFormat('ru-RU',opts).format(d)}
+function esc(s){return String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]))}
+const roomBox=document.getElementById('rooms');roomBox.innerHTML=Array.from(enabled).map(x=>'<label><input type="checkbox" checked data-room="'+x+'">'+x+'</label>').join('');
+roomBox.querySelectorAll('input').forEach(x=>x.onchange=()=>{x.checked?enabled.add(x.dataset.room):enabled.delete(x.dataset.room);draw()});
+function minutes(isoDate){let d=new Date(isoDate);let t=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(d).split(':');return Number(t[0])*60+Number(t[1])}
+function dayISO(isoDate){return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(isoDate))}
+async function load(){let first=monday(current),last=plus(first,6);document.getElementById('pick').value=iso(current);
+document.getElementById('range').textContent=fmt(first,{day:'numeric',month:'short'})+' — '+fmt(last,{day:'numeric',month:'long',year:'numeric'});
+document.getElementById('message').textContent='Загружаю расписание...';
+try{let r=await fetch('/api/calendar?from='+iso(first)+'&to='+iso(last),{cache:'no-store'});let data=await r.json();if(!r.ok)throw Error(data.error||'Ошибка запроса');shown=data.lessons;document.getElementById('message').textContent='';draw()}
+catch(e){shown=[];draw();document.getElementById('message').textContent='Не удалось получить расписание: '+e.message}}
+function draw(){let first=monday(current), dates=Array.from({length:7},(_,i)=>plus(first,i)),visible=shown.filter(x=>enabled.has(x.room));
+document.getElementById('count').textContent=visible.length+' занятий';
+let headers='<div class="headers"><div></div>'+dates.map(d=>'<div>'+fmt(d,{weekday:'short',day:'numeric',month:'short'})+'</div>').join('')+'</div>';
+let times='<div class="times">'+Array.from({length:15},(_,i)=>'<span class="hour" style="--top:'+(i*60)+'px">'+String(i+8).padStart(2,'0')+':00</span>').join('')+'</div>';
+let cols=dates.map(d=>{let events=visible.filter(x=>dayISO(x.start)===iso(d)).map(l=>{let start=minutes(l.start),end=minutes(l.end),top=start-480,height=Math.max(20,Math.min(end-start,1440-start));if(top<0||top>900)return '';return '<div class="event" data-id="'+l.id+'" style="--top:'+top+'px;--height:'+Math.min(height,900-top)+'px"><b>'+esc(l.group)+'</b><small>'+esc(l.room)+' · '+esc(l.teacher)+'</small></div>'}).join('');return '<div class="day">'+events+'</div>'}).join('');
+document.getElementById('calendar').innerHTML=headers+'<div class="body">'+times+cols+'</div>';
+document.querySelectorAll('.event').forEach(el=>el.onclick=()=>{let l=shown.find(x=>String(x.id)===el.dataset.id);let section=document.getElementById('detail');section.style.display='block';section.innerHTML='<strong>'+esc(l.group)+'</strong><p>'+esc(l.room)+' · '+esc(l.teacher)+'</p><p>'+esc(l.start)+' — '+esc(l.end)+'</p><p>Занятие №'+l.id+' · статус '+l.status+'</p>';section.scrollIntoView({behavior:'smooth',block:'nearest'})})}
+document.getElementById('prev').onclick=()=>{current=plus(current,-7);load()};
+document.getElementById('next').onclick=()=>{current=plus(current,7);load()};
+document.getElementById('today').onclick=()=>{current=new Date();load()};
+document.getElementById('pick').onchange=e=>{if(e.target.value){let p=e.target.value.split('-').map(Number);current=new Date(p[0],p[1]-1,p[2]);load()}};
+load();
+</script></body></html>'''
