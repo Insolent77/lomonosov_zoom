@@ -14,7 +14,7 @@ from zoom_links import playback_url
 from demo_workflow import PAGE as DEMO_WORKFLOW_PAGE
 from calendar_demo import PAGE as CALENDAR_DEMO_PAGE
 from live_calendar import PAGE as CALENDAR_PAGE
-from live_schedule import get_lessons
+from live_schedule import get_lessons, recording_match_context
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -100,6 +100,39 @@ def save_recording(obj):
             recording_url=CASE WHEN excluded.recording_url <> '' THEN excluded.recording_url ELSE recordings.recording_url END""",
           (uuid, str(meeting_id), topic, start, url, datetime.now(timezone.utc).isoformat()))
     return "updated" if old else "received"
+
+
+
+def find_lesson_recording(lesson_id):
+    """Only return a link for one unequivocally matched recorded Zoom session."""
+    from datetime import timedelta
+    ctx = recording_match_context(lesson_id)
+    if ctx is None:
+        return {"state":"not_found"}
+    if ctx["state"] != "ok":
+        return {"state":ctx["state"]}
+    scheduled = datetime.fromisoformat(ctx["starts"])
+    finish = datetime.fromisoformat(ctx["ends"])
+    if datetime.now(timezone.utc) < finish:
+        return {"state":"not_finished"}
+    with connect() as db:
+        rows = db.execute(
+            "SELECT recording_url, start_time FROM recordings WHERE meeting_id=? AND recording_url<>''",
+            (ctx["meeting_id"],),
+        ).fetchall()
+    matches = []
+    for row in rows:
+        try:
+            start = datetime.fromisoformat(row["start_time"].replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                continue
+            if scheduled-timedelta(minutes=15) <= start.astimezone(timezone.utc) <= scheduled+timedelta(minutes=15):
+                matches.append(row["recording_url"])
+        except (ValueError, AttributeError):
+            continue
+    if len(matches) != 1:
+        return {"state":"ambiguous" if matches else "waiting"}
+    return {"state":"ready", "url":matches[0]}
 
 
 def render_recordings(day='2026-10-11', sync=False):
@@ -214,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        if path in ("/calendar", "/api/calendar"):
+        if path in ("/calendar", "/api/calendar", "/api/lesson-recording"):
             user = os.getenv("CALENDAR_USER", "")
             password = os.getenv("CALENDAR_PASSWORD", "")
             supplied = self.headers.get("Authorization", "")
@@ -227,6 +260,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+        if path == "/api/lesson-recording":
+            try:
+                lesson_id = int(parse_qs(parsed.query).get("id", [""])[0])
+                if lesson_id < 1:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return self.respond(400, {"error": "Invalid lesson id"})
+            try:
+                return self.respond(200, find_lesson_recording(lesson_id))
+            except Exception:
+                print("Lesson recording match lookup failed", flush=True)
+                return self.respond(503, {"error": "Recording lookup failed"})
         if path == "/api/calendar":
             args = parse_qs(parsed.query)
             try:
