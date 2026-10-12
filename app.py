@@ -1,4 +1,5 @@
 """Lomonosov Zoom webhook test stand. Python 3.10+, standard library only."""
+import base64
 import hashlib
 import hmac
 import html
@@ -11,7 +12,9 @@ from urllib.parse import parse_qs
 from zoom_archive import fetch_recordings
 from zoom_links import playback_url
 from demo_workflow import PAGE as DEMO_WORKFLOW_PAGE
-from calendar_demo import PAGE as CALENDAR_PAGE
+from calendar_demo import PAGE as CALENDAR_DEMO_PAGE
+from live_calendar import PAGE as CALENDAR_PAGE
+from live_schedule import get_lessons
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -211,6 +214,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path in ("/calendar", "/api/calendar"):
+            user = os.getenv("CALENDAR_USER", "")
+            password = os.getenv("CALENDAR_PASSWORD", "")
+            supplied = self.headers.get("Authorization", "")
+            expected = "Basic " + base64.b64encode((user + ":" + password).encode()).decode()
+            if not user or not password:
+                return self.respond(503, {"error": "Set CALENDAR_USER and CALENDAR_PASSWORD in Render"})
+            if not hmac.compare_digest(supplied, expected):
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="Lomonosov schedule"')
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        if path == "/api/calendar":
+            args = parse_qs(parsed.query)
+            try:
+                rows = get_lessons(args.get("from", [""])[0], args.get("to", [""])[0])
+                return self.respond(200, {"lessons": rows})
+            except (ValueError, RuntimeError) as e:
+                return self.respond(503, {"error": str(e)})
+            except Exception:
+                print("Calendar database connection/query failed", flush=True)
+                return self.respond(503, {"error": "DB connection/query failed. Check Render logs."})
+        if path == "/calendar-demo":
+            return self.respond(200, CALENDAR_DEMO_PAGE.encode(), "text/html; charset=utf-8")
         if path == "/calendar":
             return self.respond(200, CALENDAR_PAGE.encode(), "text/html; charset=utf-8")
         if path in ("/teacher", "/chats"):
