@@ -3,7 +3,7 @@ services:
     name: lomonosov-zoom-test
     runtime: python
     plan: free
-    buildCommand: "echo No dependencies"
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python app.py"
     healthCheckPath: /health
     envVars:
