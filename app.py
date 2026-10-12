@@ -6,6 +6,9 @@ import json
 import os
 import sqlite3
 import time
+from datetime import date
+from urllib.parse import parse_qs
+from zoom_archive import fetch_recordings
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -93,10 +96,24 @@ def save_recording(obj):
     return "updated" if old else "received"
 
 
-def render_recordings():
+def render_recordings(day='2026-10-11', sync=False):
     esc = lambda x: html.escape(str(x or ""), quote=True)
+    try:
+        date.fromisoformat(day)
+        error = ""
+    except ValueError:
+        day, error = "2026-10-11", "Неверная дата."
+    status = ""
+    if sync and not error:
+        try:
+            items = fetch_recordings(day)
+            for meeting in items:
+                save_recording(meeting)
+            status = f"Zoom вернул конференций: {len(items)}."
+        except (ValueError, KeyError) as exc:
+            error = str(exc)
     with connect() as db:
-        rows = db.execute("SELECT * FROM recordings ORDER BY received_at DESC LIMIT 200").fetchall()
+        rows = db.execute("SELECT * FROM recordings WHERE substr(start_time,1,10)=? ORDER BY start_time DESC LIMIT 200", (day,)).fetchall()
     items = []
     for row in rows:
         link = ('<a href="' + esc(row["recording_url"]) + '" target="_blank" rel="noopener noreferrer">Открыть запись ↗</a>'
@@ -113,7 +130,11 @@ def render_recordings():
     p{color:#70809a;font-size:13px}a{color:#3167e8}small{color:#8392a9}</style></head><body>
     <p><a href="/">← Главная</a></p><h1>Полученные записи Zoom</h1>
     <p>Сюда поступают события recording.completed, даже если занятие пока не привязано к группе.</p>
-    <p><b>Внимание:</b> этот тестовый раздел доступен всем по ссылке.</p>""" +
+    <p><b>Внимание:</b> этот тестовый раздел доступен всем по ссылке.</p>
+    <form action="/recordings" method="GET">
+    <label>Дата: <input type="date" name="date" value='""" + '"' + esc(day) + '"' + """ required></label>
+    <button type="submit" name="sync" value="1">Загрузить из Zoom</button>
+    </form><p>""" + esc(error or status) + """</p>""" +
     (''.join(items) if items else '<article>Пока записей нет. После завершения облачной записи Zoom пришлёт событие.</article>') +
     '<small>Бесплатный Render: данные могут исчезнуть при перезапуске сервиса.</small></body></html>')
 
@@ -185,11 +206,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/":
             return self.respond(200, render_page().encode(), "text/html; charset=utf-8")
         if path == "/recordings":
-            return self.respond(200, render_recordings().encode(), "text/html; charset=utf-8")
+            return self.respond(200, render_recordings(day=parse_qs(parsed.query).get("date", ["2026-10-11"])[0], sync=parse_qs(parsed.query).get("sync", ["0"])[0] == "1").encode(), "text/html; charset=utf-8")
         if path == "/health":
             return self.respond(200, {"ok": True})
         return self.respond(404, {"error": "Not found"})
