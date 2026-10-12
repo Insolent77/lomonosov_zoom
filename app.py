@@ -132,7 +132,7 @@ def render_recordings(day='2026-10-11', sync=False):
     <p>Сюда поступают события recording.completed, даже если занятие пока не привязано к группе.</p>
     <p><b>Внимание:</b> этот тестовый раздел доступен всем по ссылке.</p>
     <form action="/recordings" method="GET">
-    <label>Дата: <input type="date" name="date" value='""" + '"' + esc(day) + '"' + """ required></label>
+    <label>Дата: <input type="date" name="date" value='""" + esc(day) + """' required></label>
     <button type="submit" name="sync" value="1">Загрузить из Zoom</button>
     </form><p>""" + esc(error or status) + """</p>""" +
     (''.join(items) if items else '<article>Пока записей нет. После завершения облачной записи Zoom пришлёт событие.</article>') +
