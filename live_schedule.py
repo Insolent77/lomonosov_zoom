@@ -52,7 +52,7 @@ def recording_match_context(lesson_id):
     with psycopg.connect(dsn, connect_timeout=6, options="-c default_transaction_read_only=on", autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT l.id, l.start_dt, l.duration, loc.meeting_url
+                SELECT l.id, l.start_dt, l.duration, loc.meeting_url, loc.name
                 FROM public.group_lesson l
                 JOIN public.group_group g ON g.id=l.group_id
                 LEFT JOIN public.group_location loc ON loc.id=COALESCE(l.location_id,g.location_id)
@@ -61,12 +61,16 @@ def recording_match_context(lesson_id):
             row=cur.fetchone()
             if not row:
                 return None
-            _, starts, duration, meeting_url=row
+            _, starts, duration, meeting_url, location_name=row
             # Only standard numeric Zoom meeting IDs allow strong matching.
             match=re.search(r"(?:zoom\\.us)/(?:j|wc/j)/(\\d{9,12})(?:[/?#]|$)", meeting_url or "", re.I)
-            if not match:
+            meeting_id=match.group(1) if match else ""
+            if not meeting_id:
+                number=re.fullmatch(r"Zoom ([1-9]|1[0-2])", location_name or "")
+                if number:
+                    meeting_id=os.getenv("ZOOM_MEETING_ID_"+number.group(1), "").replace(" ", "")
+            if not re.fullmatch(r"\d{9,12}", meeting_id):
                 return {"state":"unmapped"}
-            meeting_id=match.group(1)
             # If the same persistent Zoom meeting has multiple lessons in the time window,
             # do not attach a recording to either one.
             cur.execute("""
@@ -75,9 +79,12 @@ def recording_match_context(lesson_id):
                 JOIN public.group_group g ON g.id=l.group_id
                 LEFT JOIN public.group_location loc ON loc.id=COALESCE(l.location_id,g.location_id)
                 WHERE l.start_dt BETWEEN %s AND %s
-                  AND loc.meeting_url ~ %s
-            """, (starts-timedelta(minutes=15), starts+timedelta(minutes=15),
-                  r"/(?:j|wc/j)/"+meeting_id+r"(?:[/?#]|$)"))
+                  AND loc.id = (
+                    SELECT COALESCE(x.location_id, y.location_id)
+                    FROM public.group_lesson x JOIN public.group_group y ON y.id=x.group_id
+                    WHERE x.id=%s
+                  )
+            """, (starts-timedelta(minutes=15), starts+timedelta(minutes=15), lesson_id))
             if cur.fetchone()[0] != 1:
                 return {"state":"ambiguous"}
             return {"state":"ok","meeting_id":meeting_id,
