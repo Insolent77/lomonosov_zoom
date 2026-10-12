@@ -16,7 +16,7 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&l
 const roomBox=document.getElementById('rooms');roomBox.innerHTML=Array.from(enabled).map(x=>'<label><input type="checkbox" checked data-room="'+x+'">'+x+'</label>').join('');
 roomBox.querySelectorAll('input').forEach(x=>x.onchange=()=>{x.checked?enabled.add(x.dataset.room):enabled.delete(x.dataset.room);draw()});
 function minutes(isoDate){let d=new Date(isoDate);let t=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(d).split(':');return Number(t[0])*60+Number(t[1])}
-function dayISO(isoDate){return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(isoDate))}
+function dayISO(isoDate){const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(isoDate));const o=Object.fromEntries(p.map(x=>[x.type,x.value]));return o.year+'-'+o.month+'-'+o.day}
 async function load(){let first=monday(current),last=plus(first,6);document.getElementById('pick').value=iso(current);
 document.getElementById('range').textContent=fmt(first,{day:'numeric',month:'short'})+' — '+fmt(last,{day:'numeric',month:'long',year:'numeric'});
 document.getElementById('message').textContent='Загружаю расписание...';
