@@ -104,35 +104,63 @@ def save_recording(obj):
 
 
 def find_lesson_recording(lesson_id):
-    """Only return a link for one unequivocally matched recorded Zoom session."""
+    """Only return a recording for one unambiguous meeting session and lesson."""
     from datetime import timedelta
+    from zoneinfo import ZoneInfo
     ctx = recording_match_context(lesson_id)
     if ctx is None:
-        return {"state":"not_found"}
+        return {"state": "not_found"}
     if ctx["state"] != "ok":
-        return {"state":ctx["state"]}
+        return {"state": ctx["state"]}
     scheduled = datetime.fromisoformat(ctx["starts"])
     finish = datetime.fromisoformat(ctx["ends"])
     if datetime.now(timezone.utc) < finish:
-        return {"state":"not_finished"}
-    with connect() as db:
-        rows = db.execute(
-            "SELECT recording_url, start_time FROM recordings WHERE meeting_id=? AND recording_url<>''",
-            (ctx["meeting_id"],),
-        ).fetchall()
-    matches = []
-    for row in rows:
-        try:
-            start = datetime.fromisoformat(row["start_time"].replace("Z", "+00:00"))
-            if start.tzinfo is None:
+        return {"state": "not_finished"}
+
+    def candidates():
+        with connect() as db:
+            rows = db.execute(
+                "SELECT meeting_uuid, recording_url, start_time FROM recordings "
+                "WHERE meeting_id=? AND recording_url<>''",
+                (ctx["meeting_id"],),
+            ).fetchall()
+        found = []
+        for row in rows:
+            try:
+                start = datetime.fromisoformat(row["start_time"].replace("Z", "+00:00"))
+                if start.tzinfo is None:
+                    continue
+                # Allow Zoom host to open the room shortly before the scheduled lesson.
+                if scheduled-timedelta(minutes=30) <= start.astimezone(timezone.utc) <= scheduled+timedelta(minutes=15):
+                    found.append(dict(row))
+            except (ValueError, AttributeError):
                 continue
-            if scheduled-timedelta(minutes=15) <= start.astimezone(timezone.utc) <= scheduled+timedelta(minutes=15):
-                matches.append(row["recording_url"])
-        except (ValueError, AttributeError):
-            continue
-    if len(matches) != 1:
-        return {"state":"ambiguous" if matches else "waiting"}
-    return {"state":"ready", "url":matches[0]}
+        return found
+
+    matches = candidates()
+    if not matches:
+        # SQLite on the free Render service is ephemeral, and previously imported
+        # cloud recordings may disappear on deploy. Load from the connected Zoom
+        # account on demand; the endpoint remains protected by CALENDAR_USER/PASSWORD.
+        day = scheduled.astimezone(ZoneInfo("Europe/Moscow")).date()
+        days = [day]
+        if scheduled.astimezone(ZoneInfo("Europe/Moscow")).hour < 1:
+            days.append(day-timedelta(days=1))
+        try:
+            for d in days:
+                for meeting in fetch_recordings(d.isoformat()):
+                    if str(meeting.get("id")) == ctx["meeting_id"]:
+                        save_recording(meeting)
+        except (ValueError, KeyError) as exc:
+            print("Zoom calendar sync error:", type(exc).__name__, flush=True)
+            return {"state": "zoom_unavailable"}
+        matches = candidates()
+
+    # Deduplicate repeated copies of the same Zoom session UUID.
+    unique = {m["meeting_uuid"]: m for m in matches}
+    if len(unique) != 1:
+        return {"state": "ambiguous" if unique else "waiting"}
+    return {"state": "ready", "url": next(iter(unique.values()))["recording_url"]}
 
 
 def render_recordings(day='2026-10-11', sync=False):
