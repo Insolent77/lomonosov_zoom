@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: lomonosov-zoom-test
+    runtime: python
+    plan: free
+    buildCommand: "echo No dependencies"
+    startCommand: "python app.py"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.7
+      - key: DEMO_MODE
+        value: "0"
+      - key: ZOOM_WEBHOOK_SECRET_TOKEN
+        sync: false
